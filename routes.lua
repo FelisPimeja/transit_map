@@ -11,16 +11,14 @@
 
 local tables = {}
 
-tables.highways = osm2pgsql.define_way_table('highways', {
+tables.ways = osm2pgsql.define_way_table('ways', {
     { column = 'tags',     type = 'jsonb' },
-    { column = 'rel_refs', type = 'text' }, -- for the refs from the relations
     { column = 'rel_ids',  sql_type = 'int8[]' }, -- array with integers (for relation IDs)
     { column = 'geom',     type = 'linestring', not_null = true },
 })
 
 -- Tables don't have to have a geometry column
 tables.routes = osm2pgsql.define_relation_table('routes', {
-    { column = 'type', type = 'text' },
     { column = 'tags', type = 'jsonb' },
 })
 
@@ -42,14 +40,14 @@ function clean_tags(tags)
 end
 
 function osm2pgsql.process_way(object)
-    -- We are only interested in highways
+    -- We are only interested in ways
     if not object.tags.highway then
         return
     end
 
     clean_tags(object.tags)
 
-    -- Data we will store in the "highways" table always has the tags from
+    -- Data we will store in the "ways" table always has the tags from
     -- the way
     local row = {
         tags = object.tags,
@@ -59,19 +57,15 @@ function osm2pgsql.process_way(object)
     -- If there is any data from parent relations, add it in
     local d = w2r[object.id]
     if d then
-        local refs = {}
         local ids = {}
         for rel_id, rel_ref in pairs(d) do
-            refs[#refs + 1] = rel_ref
             ids[#ids + 1] = rel_id
         end
-        table.sort(refs)
         table.sort(ids)
-        row.rel_refs = table.concat(refs, ',')
         row.rel_ids = '{' .. table.concat(ids, ',') .. '}'
     end
 
-    tables.highways:insert(row)
+    tables.ways:insert(row)
 end
 
 -- This function is called for every added, modified, or deleted relation.
