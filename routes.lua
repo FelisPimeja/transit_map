@@ -75,6 +75,36 @@ function osm2pgsql.process_way(object)
 end
 
 
+function osm2pgsql.process_node(object)
+    -- We are only interested in ways
+    if not (object.tags.highway == 'stop' or object.tags.highway == 'bus_stop' or object.tags.highway == 'platform' or object.tags.public_transport) then
+        return
+    end
+
+    clean_tags(object.tags)
+
+    -- Data we will store in the "ways" table always has the tags from
+    -- the way
+    local row = {
+        tags = object.tags,
+        geom = object:as_point()
+    }
+
+    -- If there is any data from parent relations, add it in
+    local d = w2r[object.id]
+    if d then
+        local ids = {}
+        for rel_id, rel_ref in pairs(d) do
+            ids[#ids + 1] = rel_id
+        end
+        table.sort(ids)
+        row.rel_ids = '{' .. table.concat(ids, ',') .. '}'
+    end
+
+    tables.nodes:insert(row)
+end
+
+
 
 -- This function is called for every added, modified, or deleted relation.
 -- Its only job is to return the ids of all member ways of the specified
@@ -82,7 +112,7 @@ end
 -- about the relation!
 function osm2pgsql.select_relation_members(relation)
     -- Only interested in relations with type=route, route=road and a ref
-    if relation.tags.type == 'route'  and relation.tags.ref then
+    if relation.tags.type == 'route' and relation.tags.route ~= 'road' then
         return { ways = osm2pgsql.way_member_ids(relation) }
     end
 end
