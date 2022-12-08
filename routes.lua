@@ -11,6 +11,12 @@
 
 local tables = {}
 
+tables.nodes = osm2pgsql.define_node_table('nodes', {
+    { column = 'tags',     type = 'jsonb' },
+    { column = 'rel_ids',  sql_type = 'int8[]' }, -- array with integers (for relation IDs)
+    { column = 'geom',     type = 'point', not_null = true },
+})
+
 tables.ways = osm2pgsql.define_way_table('ways', {
     { column = 'tags',     type = 'jsonb' },
     { column = 'rel_ids',  sql_type = 'int8[]' }, -- array with integers (for relation IDs)
@@ -41,7 +47,7 @@ end
 
 function osm2pgsql.process_way(object)
     -- We are only interested in ways
-    if not object.tags.highway then
+    if not (object.tags.highway or object.tags.railway) then
         return
     end
 
@@ -67,6 +73,8 @@ function osm2pgsql.process_way(object)
 
     tables.ways:insert(row)
 end
+
+
 
 -- This function is called for every added, modified, or deleted relation.
 -- Its only job is to return the ids of all member ways of the specified
