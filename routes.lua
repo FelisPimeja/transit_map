@@ -14,19 +14,39 @@ local tables = {}
 tables.nodes = osm2pgsql.define_node_table('nodes', {
     { column = 'tags',     type = 'jsonb' },
     { column = 'rel_ids',  sql_type = 'int8[]' }, -- array with integers (for relation IDs)
-    { column = 'geom',     type = 'point', not_null = true },
-})
+    { column = 'geom',     type = 'point', projection = 4326, not_null = true },
+}, { schema = 'flex' })
 
 tables.ways = osm2pgsql.define_way_table('ways', {
     { column = 'tags',     type = 'jsonb' },
     { column = 'rel_ids',  sql_type = 'int8[]' }, -- array with integers (for relation IDs)
-    { column = 'geom',     type = 'linestring', not_null = true },
-})
+    { column = 'geom',     type = 'linestring', projection = 4326, not_null = true },
+}, { schema = 'flex' })
 
 -- Tables don't have to have a geometry column
 tables.routes = osm2pgsql.define_relation_table('routes', {
     { column = 'tags', type = 'jsonb' },
-})
+    { column = 'members', type = 'jsonb' },
+    { column = 'geom', type = 'geometrycollection', projection = 4326 },
+}, { schema = 'flex' })
+
+tables.route_master = osm2pgsql.define_relation_table('route_master', {
+    { column = 'tags', type = 'jsonb' },
+    { column = 'members', type = 'jsonb' },
+    { column = 'geom', type = 'geometrycollection', projection = 4326 },
+}, { schema = 'flex' })
+
+tables.stop_area = osm2pgsql.define_relation_table('stop_area', {
+    { column = 'tags', type = 'jsonb' },
+    { column = 'members', type = 'jsonb' },
+    { column = 'geom', type = 'geometrycollection', projection = 4326 },
+}, { schema = 'flex' })
+
+tables.stop_area_group = osm2pgsql.define_relation_table('stop_area_group', {
+    { column = 'tags', type = 'jsonb' },
+    { column = 'members', type = 'jsonb' },
+    { column = 'geom', type = 'geometrycollection', projection = 4326 },
+}, { schema = 'flex' })
 
 -- This will be used to store information about relations queryable by member
 -- way id. It is a table of tables. The outer table is indexed by the way id,
@@ -91,10 +111,10 @@ function osm2pgsql.process_node(object)
     }
 
     -- If there is any data from parent relations, add it in
-    local d = w2r[object.id]
-    if d then
+    local e = w2r[object.id]
+    if e then
         local ids = {}
-        for rel_id, rel_ref in pairs(d) do
+        for rel_id, rel_ref in pairs(e) do
             ids[#ids + 1] = rel_id
         end
         table.sort(ids)
@@ -112,7 +132,7 @@ end
 -- about the relation!
 function osm2pgsql.select_relation_members(relation)
     -- Only interested in relations with type=route, route=road and a ref
-    if relation.tags.type == 'route' and relation.tags.route ~= 'road' then
+    if (relation.tags.type == 'route' and relation.tags.route ~= 'road') or relation.tags.type == 'route_master' then
         return { ways = osm2pgsql.way_member_ids(relation) }
     end
 end
@@ -122,7 +142,9 @@ end
 function osm2pgsql.process_relation(object)
     if object.tags.type == 'route' and object.tags.ref then
         tables.routes:insert({
-            tags = object.tags
+            tags = object.tags,
+            members = object.members,
+            geom = object:as_geometrycollection()
         })
 
         -- Go through all the members and store relation ids and refs so they
@@ -135,5 +157,28 @@ function osm2pgsql.process_relation(object)
                 w2r[member.ref][object.id] = object.tags.ref
             end
         end
+        
+    elseif object.tags.type == 'route_master' then
+        tables.route_master:insert({
+            tags = object.tags,
+            members = object.members,
+            geom = object:as_geometrycollection()
+        })
+
+    elseif object.tags.public_transport == 'stop_area' then
+        tables.stop_area:insert({
+            tags = object.tags,
+            members = object.members,
+            geom = object:as_geometrycollection()
+        })
+
+    elseif object.tags.public_transport == 'stop_area_group' then
+        tables.stop_area_group:insert({
+            tags = object.tags,
+            members = object.members,
+            geom = object:as_geometrycollection()
+        })
     end
 end
+
+
