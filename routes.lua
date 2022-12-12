@@ -9,22 +9,22 @@
 -- an integer array containing the relation ids. These could be used, for
 -- instance, to look up other relation tags from the 'routes' table.
 
+-- Table structure
 local tables = {}
 
 tables.nodes = osm2pgsql.define_node_table('nodes', {
     { column = 'tags',     type = 'jsonb' },
-    { column = 'rel_ids',  sql_type = 'int8[]' }, -- array with integers (for relation IDs)
+    -- { column = 'rel_ids',  sql_type = 'int8[]' }, -- array with integers (for relation IDs)
     { column = 'geom',     type = 'point', projection = 4326, not_null = true },
 }, { schema = 'flex' })
 
 tables.ways = osm2pgsql.define_way_table('ways', {
     { column = 'tags',     type = 'jsonb' },
-    { column = 'rel_ids',  sql_type = 'int8[]' }, -- array with integers (for relation IDs)
+    -- { column = 'rel_ids',  sql_type = 'int8[]' }, -- array with integers (for relation IDs)
     { column = 'geom',     type = 'linestring', projection = 4326, not_null = true },
 }, { schema = 'flex' })
 
--- Tables don't have to have a geometry column
-tables.routes = osm2pgsql.define_relation_table('routes', {
+tables.route = osm2pgsql.define_relation_table('route', {
     { column = 'tags', type = 'jsonb' },
     { column = 'members', type = 'jsonb' },
     { column = 'geom', type = 'geometrycollection', projection = 4326 },
@@ -48,12 +48,7 @@ tables.stop_area_group = osm2pgsql.define_relation_table('stop_area_group', {
     { column = 'geom', type = 'geometrycollection', projection = 4326 },
 }, { schema = 'flex' })
 
--- This will be used to store information about relations queryable by member
--- way id. It is a table of tables. The outer table is indexed by the way id,
--- the inner table indexed by the relation id. This way even if the information
--- about a relation is added twice, it will be in there only once. It is
--- always good to write your osm2pgsql Lua code in an idempotent way, i.e.
--- it can be called any number of times and will lead to the same result.
+-- Preprocess data
 local w2r = {}
 
 function clean_tags(tags)
@@ -65,15 +60,25 @@ function clean_tags(tags)
     return next(tags) == nil
 end
 
+function osm2pgsql.process_node(object)
+    if object.tags.highway == ('bus_stop' or 'platform' or 'stop') or object.tags.railway == ('tram_stop' or 'halt' or 'platform' or 'station' or 'stop') then
+        -- return clean_tags(object.tags)
+        tables.nodes:insert({
+            tags = object.tags,
+            geom = object:as_point()
+        })
+    end
+end
+
 function osm2pgsql.process_way(object)
-    -- We are only interested in ways
+    -- We are only interested in highways
     if not (object.tags.highway or object.tags.railway) then
         return
     end
 
     clean_tags(object.tags)
 
-    -- Data we will store in the "ways" table always has the tags from
+    -- Data we will store in the "highways" table always has the tags from
     -- the way
     local row = {
         tags = object.tags,
@@ -83,89 +88,40 @@ function osm2pgsql.process_way(object)
     -- If there is any data from parent relations, add it in
     local d = w2r[object.id]
     if d then
+        local refs = {}
         local ids = {}
         for rel_id, rel_ref in pairs(d) do
+            refs[#refs + 1] = rel_ref
             ids[#ids + 1] = rel_id
         end
+        table.sort(refs)
         table.sort(ids)
+        row.rel_refs = table.concat(refs, ',')
         row.rel_ids = '{' .. table.concat(ids, ',') .. '}'
     end
 
     tables.ways:insert(row)
 end
 
-
-function osm2pgsql.process_node(object)
-    -- We are only interested in ways
-    if not (object.tags.highway == 'stop' or object.tags.highway == 'bus_stop' or object.tags.highway == 'platform' or object.tags.public_transport) then
-        return
-    end
-
-    clean_tags(object.tags)
-
-    -- Data we will store in the "ways" table always has the tags from
-    -- the way
-    local row = {
-        tags = object.tags,
-        geom = object:as_point()
-    }
-
-    -- If there is any data from parent relations, add it in
-    local e = w2r[object.id]
-    if e then
-        local ids = {}
-        for rel_id, rel_ref in pairs(e) do
-            ids[#ids + 1] = rel_id
-        end
-        table.sort(ids)
-        row.rel_ids = '{' .. table.concat(ids, ',') .. '}'
-    end
-
-    tables.nodes:insert(row)
-end
-
-
-
--- This function is called for every added, modified, or deleted relation.
--- Its only job is to return the ids of all member ways of the specified
--- relation we want to see in stage 2 again. It MUST NOT store any information
--- about the relation!
-function osm2pgsql.select_relation_members(relation)
-    -- Only interested in relations with type=route, route=road and a ref
-    if (relation.tags.type == 'route' and relation.tags.route ~= 'road') or relation.tags.type == 'route_master' then
-        return { ways = osm2pgsql.way_member_ids(relation) }
-    end
-end
-
--- The process_relation() function should store all information about way
--- members that might be needed in stage 2.
 function osm2pgsql.process_relation(object)
-    if object.tags.type == 'route' and object.tags.ref then
-        tables.routes:insert({
+    if object.tags.type == ('route') and object.tags.ref then
+        -- return clean_tags(object.tags)
+        tables.route:insert({
             tags = object.tags,
             members = object.members,
             geom = object:as_geometrycollection()
         })
 
-        -- Go through all the members and store relation ids and refs so they
-        -- can be found by the way id.
-        for _, member in ipairs(object.members) do
-            if member.type == 'w' then
-                if not w2r[member.ref] then
-                    w2r[member.ref] = {}
-                end
-                w2r[member.ref][object.id] = object.tags.ref
-            end
-        end
-        
     elseif object.tags.type == 'route_master' then
+        -- return clean_tags(object.tags)
         tables.route_master:insert({
             tags = object.tags,
             members = object.members,
             geom = object:as_geometrycollection()
         })
-
+    
     elseif object.tags.public_transport == 'stop_area' then
+        -- return clean_tags(object.tags)
         tables.stop_area:insert({
             tags = object.tags,
             members = object.members,
@@ -173,6 +129,7 @@ function osm2pgsql.process_relation(object)
         })
 
     elseif object.tags.public_transport == 'stop_area_group' then
+        -- return clean_tags(object.tags)
         tables.stop_area_group:insert({
             tags = object.tags,
             members = object.members,
@@ -180,5 +137,4 @@ function osm2pgsql.process_relation(object)
         })
     end
 end
-
 
